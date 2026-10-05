@@ -308,6 +308,35 @@ func TestDNSVerifierRejectsMalformedResponses(t *testing.T) {
 	}
 }
 
+func TestDNSVerifierRejectsMissingDeclaredSections(t *testing.T) {
+	query, err := newDNSQuery(ConnectivityProbeHost)
+	if err != nil {
+		t.Fatal(err)
+	}
+	base := append([]byte(nil), dnsResponseFor(query.wire)[:dnsHeaderLen+len(query.question)]...)
+	binary.BigEndian.PutUint16(base[2:4], dnsFlagResponse|dnsFlagRD|dnsRcodeSuccess)
+	for _, c := range []struct {
+		name string
+		set  func([]byte)
+	}{
+		{"ANCOUNT without answer bytes", func(msg []byte) { binary.BigEndian.PutUint16(msg[6:8], 1) }},
+		{"NSCOUNT without authority bytes", func(msg []byte) { binary.BigEndian.PutUint16(msg[8:10], 1) }},
+		{"ARCOUNT without additional bytes", func(msg []byte) { binary.BigEndian.PutUint16(msg[10:12], 1) }},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			msg := append([]byte(nil), base...)
+			c.set(msg)
+			if err := query.verify(msg); err == nil || !strings.Contains(err.Error(), "truncated") {
+				t.Fatalf("verify = %v, want a truncated-section error", err)
+			}
+		})
+	}
+	// A compressed A answer that dnsResponseFor builds must still verify.
+	if err := query.verify(dnsResponseFor(query.wire)); err != nil {
+		t.Fatalf("valid compressed answer rejected: %v", err)
+	}
+}
+
 func TestDNSVerifierClassifiesValidReachabilityResponsesWithoutAnswers(t *testing.T) {
 	query, err := newDNSQuery(ConnectivityProbeHost)
 	if err != nil {
